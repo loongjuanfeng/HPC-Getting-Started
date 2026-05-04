@@ -1,0 +1,26 @@
+CompileFlags:
+  Add:
+    - -std=c++23
+    - -fopenmp
+    - -Wall
+    - -Wextra
+    - -ffast-math
+  Remove:
+    - -fmodules-ts
+    - -fmodule-mapper=*
+    - -fdeps-format=*
+
+Diagnostics:
+  Suppress:
+    - drv_unknown_argument
+    - capture_binding_openmp
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - readability-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - readability-identifier-length
+      - readability-named-parameter
+      - readability-function-cognitive-complexity

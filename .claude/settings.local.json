@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -B build -S .)",
+      "Bash(cmake --build build)",
+      "Bash(./build/vector_add -s 50000000)",
+      "Bash(rtk ls *)",
+      "Bash(rtk read *)",
+      "WebSearch",
+      "Bash(rtk grep *)"
+    ]
+  }
+}

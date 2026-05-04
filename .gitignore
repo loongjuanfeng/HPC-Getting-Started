@@ -1,0 +1,44 @@
+# Build directories and generated CMake state
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Build tool output
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled artifacts
+*.a
+*.dll
+*.dylib
+*.exe
+*.lib
+*.o
+*.obj
+*.out
+*.so
+
+# Local benchmark outputs and logs
+*.csv
+*.log
+*.prof
+*.trace
+perf.data
+perf.data.*
+
+# Editor and OS files
+.cache/
+.clangd/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
