@@ -2,6 +2,7 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
@@ -17,10 +18,7 @@
 
 #include <CLI/CLI.hpp>
 
-namespace config {
-constexpr bool use_no_initilization_allocator = true;
-constexpr std::size_t default_vector_size = 2'000'000'000;
-} // namespace config
+#include "config.hh"
 
 template <class Type> struct no_initialization_allocator {
     using value_type = Type;
@@ -37,6 +35,10 @@ template <class Type> struct no_initialization_allocator {
 
         void* pointer = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
                                MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+        if (pointer == MAP_FAILED) {
+            pointer =
+                ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        }
         if (pointer == MAP_FAILED) {
             throw std::bad_alloc();
         }
@@ -77,7 +79,7 @@ void setup_threads();
 
 template <typename Type, std::size_t vector_count> auto create_vectors(std::size_t vector_size) {
     using vector_type =
-        std::conditional_t<config::use_no_initilization_allocator,
+        std::conditional_t<config::use_no_initialization_allocator,
                            std::vector<Type, no_initialization_allocator<Type>>, std::vector<Type>>;
     std::array<vector_type, vector_count> vectors;
     for (auto& vector : vectors) {
@@ -102,9 +104,9 @@ public:
 Timer timer;
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"vector addition - HPC starter"};
+    CLI::App app{"OpenMP vector addition - HPC starter"};
     std::size_t vector_size{config::default_vector_size};
-    app.add_option("-s,--size", vector_size, "Number of elements");
+    app.add_option("-s,--size", vector_size, "Number of elements")->check(CLI::PositiveNumber);
     CLI11_PARSE(app, argc, argv);
 
     setup_threads();
@@ -123,7 +125,7 @@ int main(int argc, char* argv[]) {
 
 #pragma omp parallel for
     for (std::size_t i = 0; i < vector_size; i++) {
-        sum_vector[i] = vector_1[i] * vector_2[i];
+        sum_vector[i] = vector_1[i] + vector_2[i];
     }
 
     timer.end();
@@ -137,7 +139,14 @@ int main(int argc, char* argv[]) {
     auto report_logger = spdlog::stdout_color_mt("REPORT");
 
     const double vector_total_size = 3.0 * static_cast<double>(vector_size * sizeof(float)) / 1e9;
-    report_logger->info("=== Vector Addition ===");
+    const auto expected = vector_1.front() + vector_2.front();
+    if (std::abs(sum_vector.front() - expected) > std::numeric_limits<float>::epsilon() * 16.0F) {
+        spdlog::error("OpenMP verification failed: sum_vector[0] = {} expected {}",
+                      sum_vector.front(), expected);
+        return EXIT_FAILURE;
+    }
+
+    report_logger->info("=== OpenMP Vector Addition ===");
     report_logger->info("{:>12} = {:>10.0f}", "size", static_cast<double>(vector_size));
     report_logger->info("{:>12} = {:>10.4f} s", "time used", timer.elapsed());
     report_logger->info("{:>12} = {:>10.4f} GB/s", "bandwidth",

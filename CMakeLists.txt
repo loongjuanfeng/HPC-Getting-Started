@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(HPC LANGUAGES CXX)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+endif()
+
+project(HPC LANGUAGES CXX CUDA)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -47,15 +51,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(OpenBLAS)
 
+target_include_directories(openblas_static
+    INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/generated>
+        $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
+)
+
 # Add -march=native cxxflag
 option(USE_NATIVE_ARCH "Compile for the host CPU (-march=native)" ON)
 
-# === vector addition ===
-add_executable(vector_addition src/vector_addition.cc)
+# === vector addition: OpenMP implementation ===
+add_executable(vector_addition-openmp src/vector_addition/vector_addition-openmp.cc)
 
-target_compile_features(vector_addition PRIVATE cxx_std_23)
+target_compile_features(vector_addition-openmp PRIVATE cxx_std_23)
 
-target_compile_options(vector_addition PRIVATE
+target_compile_options(vector_addition-openmp PRIVATE
     -O3
     -Wall
     -Wextra
@@ -63,10 +73,25 @@ target_compile_options(vector_addition PRIVATE
     $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
 )
 
-target_link_libraries(vector_addition PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
+target_link_libraries(vector_addition-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
+
+# === vector addition: CUDA implementation ===
+add_executable(vector_addition-cuda src/vector_addition/vector_addition-cuda.cu)
+
+set_target_properties(vector_addition-cuda PROPERTIES
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+)
+
+target_compile_options(vector_addition-cuda PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+)
+
+target_link_libraries(vector_addition-cuda PRIVATE CLI11::CLI11 spdlog::spdlog)
 
 # === matrix multiplication: hand-written OpenMP implementation
-add_executable(matrix_multiplication-handwritten src/matrix_multiplication-handwritten.cc)
+add_executable(matrix_multiplication-handwritten src/matrix_multiplication/matrix_multiplication-handwritten.cc)
 
 target_compile_features(matrix_multiplication-handwritten PRIVATE cxx_std_23)
 
@@ -81,7 +106,7 @@ target_compile_options(matrix_multiplication-handwritten PRIVATE
 target_link_libraries(matrix_multiplication-handwritten PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
 
 # === matrix multiplication: OpenBLAS implementation
-add_executable(matrix_multiplication-openblas src/matrix_multiplication-openblas.cc)
+add_executable(matrix_multiplication-openblas src/matrix_multiplication/matrix_multiplication-openblas.cc)
 
 target_compile_features(matrix_multiplication-openblas PRIVATE cxx_std_23)
 
@@ -96,7 +121,7 @@ target_compile_options(matrix_multiplication-openblas PRIVATE
 target_link_libraries(matrix_multiplication-openblas PRIVATE CLI11::CLI11 spdlog::spdlog openblas_static)
 
 # === 2D stencil templates ===
-add_executable(stencil_2d-baseline src/stencil_2d-baseline.cc)
+add_executable(stencil_2d-baseline src/stencil_2d/stencil_2d-baseline.cc)
 
 target_compile_features(stencil_2d-baseline PRIVATE cxx_std_23)
 
@@ -110,7 +135,7 @@ target_compile_options(stencil_2d-baseline PRIVATE
 
 target_link_libraries(stencil_2d-baseline PRIVATE CLI11::CLI11 spdlog::spdlog)
 
-add_executable(stencil_2d-openmp src/stencil_2d-openmp.cc)
+add_executable(stencil_2d-openmp src/stencil_2d/stencil_2d-openmp.cc)
 
 target_compile_features(stencil_2d-openmp PRIVATE cxx_std_23)
 
@@ -124,7 +149,7 @@ target_compile_options(stencil_2d-openmp PRIVATE
 
 target_link_libraries(stencil_2d-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
 
-add_executable(stencil_2d-tiled src/stencil_2d-tiled.cc)
+add_executable(stencil_2d-tiled src/stencil_2d/stencil_2d-tiled.cc)
 
 target_compile_features(stencil_2d-tiled PRIVATE cxx_std_23)
 
@@ -139,7 +164,7 @@ target_compile_options(stencil_2d-tiled PRIVATE
 target_link_libraries(stencil_2d-tiled PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
 
 # === CSR SpMV templates ===
-add_executable(spmv_csr-baseline src/spmv_csr-baseline.cc)
+add_executable(spmv_csr-baseline src/spmv_csr/spmv_csr-baseline.cc)
 
 target_compile_features(spmv_csr-baseline PRIVATE cxx_std_23)
 
@@ -153,7 +178,7 @@ target_compile_options(spmv_csr-baseline PRIVATE
 
 target_link_libraries(spmv_csr-baseline PRIVATE CLI11::CLI11 spdlog::spdlog)
 
-add_executable(spmv_csr-openmp src/spmv_csr-openmp.cc)
+add_executable(spmv_csr-openmp src/spmv_csr/spmv_csr-openmp.cc)
 
 target_compile_features(spmv_csr-openmp PRIVATE cxx_std_23)
 
@@ -167,7 +192,7 @@ target_compile_options(spmv_csr-openmp PRIVATE
 
 target_link_libraries(spmv_csr-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
 
-add_executable(spmv_csr-balanced src/spmv_csr-balanced.cc)
+add_executable(spmv_csr-balanced src/spmv_csr/spmv_csr-balanced.cc)
 
 target_compile_features(spmv_csr-balanced PRIVATE cxx_std_23)
 

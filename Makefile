@@ -1,15 +1,19 @@
-.PHONY: all build run-va run-mm run-mm-handwritten run-mm-openblas run-stencil run-stencil-baseline run-stencil-openmp run-stencil-tiled run-spmv run-spmv-baseline run-spmv-openmp run-spmv-balanced clean
+.PHONY: all build run-va run-va-openmp run-va-cuda run-mm run-mm-handwritten run-mm-openblas run-stencil run-stencil-baseline run-stencil-openmp run-stencil-tiled run-spmv run-spmv-baseline run-spmv-openmp run-spmv-balanced clean
 
 BUILD_DIR := build
 
 all: build
 
 build:
-	cmake -S . -B $(BUILD_DIR) -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	cmake --build $(BUILD_DIR)
+	cmake --workflow --preset ninja-release-full
 
-run-va: build
-	./$(BUILD_DIR)/vector_addition
+run-va: run-va-openmp run-va-cuda
+
+run-va-openmp: build
+	./$(BUILD_DIR)/vector_addition-openmp
+
+run-va-cuda: build
+	./$(BUILD_DIR)/vector_addition-cuda
 
 run-mm: run-mm-handwritten run-mm-openblas
 
@@ -42,4 +46,4 @@ run-spmv-balanced: build
 	./$(BUILD_DIR)/spmv_csr-balanced
 
 clean:
-	rm -rf $(BUILD_DIR) CMakeCache.txt CMakeFiles cmake_install.cmake compile_commands.json _deps generated openblas_config.h vector_addition matrix_multiplication matrix_multiplication-handwritten matrix_multiplication-openblas stencil_2d-baseline stencil_2d-openmp stencil_2d-tiled spmv_csr-baseline spmv_csr-openmp spmv_csr-balanced
+	rm -rf $(BUILD_DIR) CMakeCache.txt CMakeFiles cmake_install.cmake compile_commands.json _deps generated openblas_config.h vector_addition vector_addition-openmp vector_addition-cuda matrix_multiplication matrix_multiplication-handwritten matrix_multiplication-openblas stencil_2d-baseline stencil_2d-openmp stencil_2d-tiled spmv_csr-baseline spmv_csr-openmp spmv_csr-balanced
