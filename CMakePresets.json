@@ -8,10 +8,8 @@
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_C_COMPILER": "/usr/bin/gcc-14",
-                "CMAKE_CXX_COMPILER": "/usr/bin/g++-14",
-                "CMAKE_CUDA_HOST_COMPILER": "/usr/bin/g++-14",
                 "CMAKE_CUDA_ARCHITECTURES": "86",
+                "HPC_ENABLE_CUDA": true,
                 "CMAKE_EXPORT_COMPILE_COMMANDS": true
             }
         }

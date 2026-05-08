@@ -1,6 +1,7 @@
-#include <CLI/CLI.hpp>
+#include "cuda_glibc_compat.hh"
 
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -12,6 +13,8 @@
 #include <spdlog/spdlog.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "config.hh"
@@ -23,6 +26,72 @@ void check_cuda(cudaError_t result, const char* call) {
 }
 
 #define CHECK_CUDA(call) check_cuda((call), #call)
+
+struct Options {
+    std::size_t vector_size{config::default_vector_size};
+    int block_size{config::default_block_size};
+};
+
+void print_usage(std::string_view program) {
+    spdlog::info("Usage: {} [--size N] [--block-size N]", program);
+}
+
+template <typename Type>
+Type parse_positive_integer(std::string_view value, std::string_view name) {
+    Type parsed{};
+    const auto* begin = value.data();
+    const auto* end = value.data() + value.size();
+    const auto [position, error] = std::from_chars(begin, end, parsed);
+    if (error != std::errc{} || position != end || parsed <= 0) {
+        throw std::runtime_error("invalid value for " + std::string(name) + ": " +
+                                 std::string(value));
+    }
+    return parsed;
+}
+
+Options parse_options(int argc, char* argv[]) {
+    Options options;
+
+    const auto read_value = [&](int& index, std::string_view name) -> std::string_view {
+        if (index + 1 >= argc) {
+            throw std::runtime_error("missing value for " + std::string(name));
+        }
+        ++index;
+        return argv[index];
+    };
+
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument{argv[index]};
+        if (argument == "-h" || argument == "--help") {
+            print_usage(argv[0]);
+            std::exit(EXIT_SUCCESS);
+        }
+        if (argument == "-s" || argument == "--size") {
+            options.vector_size =
+                parse_positive_integer<std::size_t>(read_value(index, argument), argument);
+            continue;
+        }
+        if (argument.starts_with("--size=")) {
+            options.vector_size = parse_positive_integer<std::size_t>(argument.substr(7), "--size");
+            continue;
+        }
+        if (argument == "-b" || argument == "--block-size") {
+            options.block_size = parse_positive_integer<int>(read_value(index, argument), argument);
+            continue;
+        }
+        if (argument.starts_with("--block-size=")) {
+            options.block_size = parse_positive_integer<int>(argument.substr(13), "--block-size");
+            continue;
+        }
+        throw std::runtime_error("unknown option: " + std::string(argument));
+    }
+
+    if (options.block_size > 1024) {
+        throw std::runtime_error("invalid value for --block-size: expected 1 through 1024");
+    }
+
+    return options;
+}
 
 template <typename Type, std::size_t vector_count> auto create_vectors(std::size_t vector_size) {
     std::array<std::vector<Type>, vector_count> vectors;
@@ -70,13 +139,9 @@ __global__ void vector_addition_kernel(const float* vector_1, const float* vecto
 }
 
 int main(int argc, char* argv[]) try {
-    CLI::App app{"CUDA vector addition - HPC starter"};
-    std::size_t vector_size{config::default_vector_size};
-    int block_size{config::default_block_size};
-    app.add_option("-s,--size", vector_size, "Number of elements")->check(CLI::PositiveNumber);
-    app.add_option("-b,--block-size", block_size, "CUDA threads per block")
-        ->check(CLI::Range(1, 1024));
-    CLI11_PARSE(app, argc, argv);
+    const auto options = parse_options(argc, argv);
+    const auto vector_size = options.vector_size;
+    const auto block_size = options.block_size;
 
     auto [vector_1, vector_2, sum_vector] = create_vectors<float, 3>(vector_size);
 

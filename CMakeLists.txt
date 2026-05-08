@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-    set(CMAKE_CUDA_ARCHITECTURES 86)
-endif()
-
-project(HPC LANGUAGES CXX CUDA)
+project(HPC LANGUAGES CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -13,59 +9,50 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Add CLI11
-include(FetchContent)
-FetchContent_Declare(
-  CLI11
-  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-  GIT_TAG v2.5.0
-)
-FetchContent_MakeAvailable(CLI11)
-
-# Add Spdlog
-FetchContent_Declare(
-  spdlog
-  GIT_REPOSITORY https://github.com/gabime/spdlog.git
-  GIT_TAG v1.15.2
-)
-FetchContent_MakeAvailable(spdlog)
-
-# Add OpenMP
-find_package(OpenMP REQUIRED)
-
-# OpenBLAS from source, tuned for Sapphire Rapids (Emerald Rapids compatible)
-set(BUILD_WITHOUT_LAPACK ON CACHE BOOL "")
-set(BUILD_STATIC_LIBS ON CACHE BOOL "")
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "")
-set(ONLY_CBLAS ON CACHE BOOL "")
-set(BUILD_SINGLE ON CACHE BOOL "")
-set(BUILD_DOUBLE OFF CACHE BOOL "")
-set(BUILD_COMPLEX OFF CACHE BOOL "")
-set(BUILD_COMPLEX16 OFF CACHE BOOL "")
-set(TARGET SAPPHIRERAPIDS CACHE STRING "OpenBLAS CPU target")
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-FetchContent_Declare(
-  OpenBLAS
-  GIT_REPOSITORY https://github.com/OpenMathLib/OpenBLAS.git
-  GIT_TAG v0.3.28
-)
-FetchContent_MakeAvailable(OpenBLAS)
-
-target_include_directories(openblas_static
-    INTERFACE
-        $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/generated>
-        $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
-)
-
-# Add -march=native cxxflag
+option(HPC_ENABLE_CUDA "Build CUDA benchmark targets" ON)
 option(USE_NATIVE_ARCH "Compile for the host CPU (-march=native)" ON)
 
-# === vector addition: OpenMP implementation ===
-add_executable(vector_addition-openmp src/vector_addition/vector_addition-openmp.cc)
+if(HPC_ENABLE_CUDA)
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 86)
+    endif()
 
-target_compile_features(vector_addition-openmp PRIVATE cxx_std_23)
+    enable_language(CUDA)
+endif()
 
-target_compile_options(vector_addition-openmp PRIVATE
+find_package(CLI11 REQUIRED)
+find_package(spdlog REQUIRED)
+find_package(OpenMP REQUIRED)
+
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(OPENBLAS QUIET IMPORTED_TARGET openblas)
+endif()
+
+if(TARGET PkgConfig::OPENBLAS)
+    add_library(OpenBLAS::OpenBLAS ALIAS PkgConfig::OPENBLAS)
+else()
+    find_path(OPENBLAS_INCLUDE_DIR
+        NAMES cblas.h
+        PATH_SUFFIXES include openblas include/openblas
+    )
+    find_library(OPENBLAS_LIBRARY NAMES openblas)
+
+    include(FindPackageHandleStandardArgs)
+    find_package_handle_standard_args(OpenBLAS
+        REQUIRED_VARS OPENBLAS_INCLUDE_DIR OPENBLAS_LIBRARY
+    )
+
+    add_library(OpenBLAS::OpenBLAS UNKNOWN IMPORTED)
+    set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+        IMPORTED_LOCATION "${OPENBLAS_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${OPENBLAS_INCLUDE_DIR}"
+    )
+endif()
+
+add_library(hpc_cxx_options INTERFACE)
+target_compile_features(hpc_cxx_options INTERFACE cxx_std_23)
+target_compile_options(hpc_cxx_options INTERFACE
     -O3
     -Wall
     -Wextra
@@ -73,135 +60,84 @@ target_compile_options(vector_addition-openmp PRIVATE
     $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
 )
 
-target_link_libraries(vector_addition-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
+add_library(hpc_common_libs INTERFACE)
+target_link_libraries(hpc_common_libs INTERFACE CLI11::CLI11 spdlog::spdlog)
 
-# === vector addition: CUDA implementation ===
-add_executable(vector_addition-cuda src/vector_addition/vector_addition-cuda.cu)
+function(hpc_add_cpp_executable target source)
+    cmake_parse_arguments(HPC_TARGET "OPENMP;OPENBLAS" "" "" ${ARGN})
 
-set_target_properties(vector_addition-cuda PROPERTIES
-    CUDA_STANDARD 20
-    CUDA_STANDARD_REQUIRED ON
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE hpc_cxx_options hpc_common_libs)
+
+    if(HPC_TARGET_OPENMP)
+        target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+
+    if(HPC_TARGET_OPENBLAS)
+        target_link_libraries(${target} PRIVATE OpenBLAS::OpenBLAS)
+    endif()
+endfunction()
+
+# === vector addition ===
+hpc_add_cpp_executable(vector_addition-openmp
+    src/vector_addition/vector_addition-openmp.cc
+    OPENMP
 )
 
-target_compile_options(vector_addition-cuda PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:-O3>
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+if(HPC_ENABLE_CUDA)
+    # === vector addition: CUDA implementation ===
+    add_executable(vector_addition-cuda src/vector_addition/vector_addition-cuda.cu)
+
+    set_target_properties(vector_addition-cuda PROPERTIES
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON
+    )
+
+    target_compile_options(vector_addition-cuda PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+    )
+
+    target_link_libraries(vector_addition-cuda PRIVATE spdlog::spdlog)
+endif()
+
+# === matrix multiplication ===
+hpc_add_cpp_executable(matrix_multiplication-handwritten
+    src/matrix_multiplication/matrix_multiplication-handwritten.cc
+    OPENMP
 )
 
-target_link_libraries(vector_addition-cuda PRIVATE CLI11::CLI11 spdlog::spdlog)
-
-# === matrix multiplication: hand-written OpenMP implementation
-add_executable(matrix_multiplication-handwritten src/matrix_multiplication/matrix_multiplication-handwritten.cc)
-
-target_compile_features(matrix_multiplication-handwritten PRIVATE cxx_std_23)
-
-target_compile_options(matrix_multiplication-handwritten PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+hpc_add_cpp_executable(matrix_multiplication-openblas
+    src/matrix_multiplication/matrix_multiplication-openblas.cc
+    OPENBLAS
 )
 
-target_link_libraries(matrix_multiplication-handwritten PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
-
-# === matrix multiplication: OpenBLAS implementation
-add_executable(matrix_multiplication-openblas src/matrix_multiplication/matrix_multiplication-openblas.cc)
-
-target_compile_features(matrix_multiplication-openblas PRIVATE cxx_std_23)
-
-target_compile_options(matrix_multiplication-openblas PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+# === 2D stencil ===
+hpc_add_cpp_executable(stencil_2d-baseline
+    src/stencil_2d/stencil_2d-baseline.cc
 )
 
-target_link_libraries(matrix_multiplication-openblas PRIVATE CLI11::CLI11 spdlog::spdlog openblas_static)
-
-# === 2D stencil templates ===
-add_executable(stencil_2d-baseline src/stencil_2d/stencil_2d-baseline.cc)
-
-target_compile_features(stencil_2d-baseline PRIVATE cxx_std_23)
-
-target_compile_options(stencil_2d-baseline PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+hpc_add_cpp_executable(stencil_2d-openmp
+    src/stencil_2d/stencil_2d-openmp.cc
+    OPENMP
 )
 
-target_link_libraries(stencil_2d-baseline PRIVATE CLI11::CLI11 spdlog::spdlog)
-
-add_executable(stencil_2d-openmp src/stencil_2d/stencil_2d-openmp.cc)
-
-target_compile_features(stencil_2d-openmp PRIVATE cxx_std_23)
-
-target_compile_options(stencil_2d-openmp PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+hpc_add_cpp_executable(stencil_2d-tiled
+    src/stencil_2d/stencil_2d-tiled.cc
+    OPENMP
 )
 
-target_link_libraries(stencil_2d-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
-
-add_executable(stencil_2d-tiled src/stencil_2d/stencil_2d-tiled.cc)
-
-target_compile_features(stencil_2d-tiled PRIVATE cxx_std_23)
-
-target_compile_options(stencil_2d-tiled PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+# === CSR SpMV ===
+hpc_add_cpp_executable(spmv_csr-baseline
+    src/spmv_csr/spmv_csr-baseline.cc
 )
 
-target_link_libraries(stencil_2d-tiled PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
-
-# === CSR SpMV templates ===
-add_executable(spmv_csr-baseline src/spmv_csr/spmv_csr-baseline.cc)
-
-target_compile_features(spmv_csr-baseline PRIVATE cxx_std_23)
-
-target_compile_options(spmv_csr-baseline PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+hpc_add_cpp_executable(spmv_csr-openmp
+    src/spmv_csr/spmv_csr-openmp.cc
+    OPENMP
 )
 
-target_link_libraries(spmv_csr-baseline PRIVATE CLI11::CLI11 spdlog::spdlog)
-
-add_executable(spmv_csr-openmp src/spmv_csr/spmv_csr-openmp.cc)
-
-target_compile_features(spmv_csr-openmp PRIVATE cxx_std_23)
-
-target_compile_options(spmv_csr-openmp PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
+hpc_add_cpp_executable(spmv_csr-balanced
+    src/spmv_csr/spmv_csr-balanced.cc
+    OPENMP
 )
-
-target_link_libraries(spmv_csr-openmp PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
-
-add_executable(spmv_csr-balanced src/spmv_csr/spmv_csr-balanced.cc)
-
-target_compile_features(spmv_csr-balanced PRIVATE cxx_std_23)
-
-target_compile_options(spmv_csr-balanced PRIVATE
-    -O3
-    -Wall
-    -Wextra
-    -ffast-math
-    $<$<BOOL:${USE_NATIVE_ARCH}>:-march=native>
-)
-
-target_link_libraries(spmv_csr-balanced PRIVATE OpenMP::OpenMP_CXX CLI11::CLI11 spdlog::spdlog)
