@@ -1,176 +1,86 @@
-#include "spdlog/common.h"
-#include <array>
-#include <cassert>
-#include <chrono>
-#include <cmath>
-#include <cstddef>
-#include <cstdlib>
-#include <limits>
-#include <new>
 #include <omp.h>
-#include <random>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <spdlog/spdlog.h>
-#include <sys/mman.h>
-#include <thread>
-#include <type_traits>
-#include <vector>
 
 #include <CLI/CLI.hpp>
+#include <cstddef>
+#include <cstdlib>
+#include <iostream>
+#include <random>
+#include <thread>
 
-#include "config.hh"
+#include "header.hh"
+#include "timer.hh"
 
-template <class Type> struct no_initialization_allocator {
-    using value_type = Type;
-    using propagate_on_container_move_assignment = std::true_type;
-    using propagate_on_container_swap = std::true_type;
-    using is_always_equal = std::true_type;
-    explicit no_initialization_allocator() noexcept = default;
-    [[nodiscard]] Type* allocate(std::size_t size) {
-        if (size > std::numeric_limits<std::size_t>::max() / sizeof(Type)) {
-            throw std::bad_array_new_length();
-        }
-
-        const auto bytes = size * sizeof(Type);
-
-        void* pointer = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
-        if (pointer == MAP_FAILED) {
-            pointer =
-                ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        }
-        if (pointer == MAP_FAILED) {
-            throw std::bad_alloc();
-        }
-
-        ::madvise(pointer, bytes, MADV_HUGEPAGE);
-
-        return static_cast<Type*>(pointer);
-    }
-
-    void deallocate(Type* pointer, std::size_t size) noexcept {
-        ::munmap(pointer, size * sizeof(Type));
-    }
-
-    [[nodiscard]] constexpr std::size_t max_size() const noexcept {
-        return std::numeric_limits<std::size_t>::max() / sizeof(Type);
-    }
-
-    template <class U>
-    void construct(U* pointer) noexcept(std::is_nothrow_default_constructible_v<U>) {
-        ::new (static_cast<void*>(pointer)) U;
-    }
-
-    template <class U, class... Args>
-        requires(sizeof...(Args) > 0)
-    void construct(U* pointer,
-                   Args&&... args) noexcept(std::is_nothrow_constructible_v<U, Args...>) {
-        ::new (static_cast<void*>(pointer)) U(std::forward<Args>(args)...);
-    }
-
-    template <class U> void destroy(U* pointer) noexcept { std::destroy_at(pointer); }
-
-    template <class U> bool operator==(const no_initialization_allocator<U>&) const noexcept {
-        return true;
-    }
-};
-
+namespace {
 void setup_threads();
 
-template <typename Type, std::size_t vector_count> auto create_vectors(std::size_t vector_size) {
-    using vector_type =
-        std::conditional_t<config::use_no_initialization_allocator,
-                           std::vector<Type, no_initialization_allocator<Type>>, std::vector<Type>>;
-    std::array<vector_type, vector_count> vectors;
-    for (auto& vector : vectors) {
-        vector = vector_type(vector_size);
-    }
-    return vectors;
+void initialize_inputs(vector_storage<float>& vector_1,
+                       vector_storage<float>& vector_2,
+                       const std::size_t vector_size) {
+#pragma omp parallel for
+        for (std::size_t i = 0; i < vector_size; i++) {
+                thread_local std::mt19937 random_number_generator(
+                    std::random_device{}());
+                thread_local std::normal_distribution<float>
+                    normal_distribution{1.0};
+                vector_1[i] = normal_distribution(random_number_generator);
+                vector_2[i] = normal_distribution(random_number_generator);
+        }
 }
 
-class Timer {
-    using Clock = std::chrono::high_resolution_clock;
-    Clock::time_point time_start;
-    Clock::time_point time_end;
-
-public:
-    void start();
-    void end();
-
-    [[nodiscard]] auto elapsed() const {
-        return std::chrono::duration<double>(time_end - time_start).count();
-    }
-};
-Timer timer;
-
-int main(int argc, char* argv[]) {
-    CLI::App app{"OpenMP vector addition - HPC starter"};
-    std::size_t vector_size{config::default_vector_size};
-    app.add_option("-s,--size", vector_size, "Number of elements")->check(CLI::PositiveNumber);
-    CLI11_PARSE(app, argc, argv);
-
-    setup_threads();
-
-    auto [vector_1, vector_2, sum_vector] = create_vectors<float, 3>(vector_size);
-
+void add_vectors(const vector_storage<float>& vector_1,
+                 const vector_storage<float>& vector_2,
+                 vector_storage<float>& sum_vector,
+                 const std::size_t vector_size) {
 #pragma omp parallel for
-    for (std::size_t i = 0; i < vector_size; i++) {
-        thread_local std::mt19937 random_number_generator(std::random_device{}());
-        thread_local std::normal_distribution<float> normal_distribution{1.0};
-        vector_1[i] = normal_distribution(random_number_generator);
-        vector_2[i] = normal_distribution(random_number_generator);
-    }
-
-    timer.start();
-
-#pragma omp parallel for
-    for (std::size_t i = 0; i < vector_size; i++) {
-        sum_vector[i] = vector_1[i] + vector_2[i];
-    }
-
-    timer.end();
-
-    double vector_sum{0.0};
-#pragma omp parallel for reduction(+ : vector_sum)
-    for (std::size_t i = 0; i < vector_size; i++) {
-        vector_sum += sum_vector[i];
-    }
-
-    auto report_logger = spdlog::stdout_color_mt("REPORT");
-
-    const double vector_total_size = 3.0 * static_cast<double>(vector_size * sizeof(float)) / 1e9;
-    const auto expected = vector_1.front() + vector_2.front();
-    if (std::abs(sum_vector.front() - expected) > std::numeric_limits<float>::epsilon() * 16.0F) {
-        spdlog::error("OpenMP verification failed: sum_vector[0] = {} expected {}",
-                      sum_vector.front(), expected);
-        return EXIT_FAILURE;
-    }
-
-    report_logger->info("=== OpenMP Vector Addition ===");
-    report_logger->info("{:>12} = {:>10.0f}", "size", static_cast<double>(vector_size));
-    report_logger->info("{:>12} = {:>10.4f} s", "time used", timer.elapsed());
-    report_logger->info("{:>12} = {:>10.4f} GB/s", "bandwidth",
-                        vector_total_size / timer.elapsed());
-    report_logger->info("{:>12} = {:>10.4f}", "mean", vector_sum / vector_size);
-
-    return EXIT_SUCCESS;
+        for (std::size_t i = 0; i < vector_size; i++) {
+                sum_vector[i] = vector_1[i] + vector_2[i];
+        }
 }
-
-// helper functions
 
 void setup_threads() {
-    const auto* const OMP_NUM_THREADS = std::getenv("OMP_NUM_THREADS");
-    const auto threads_count = static_cast<bool>(OMP_NUM_THREADS)
-                                   ? std::atoi(OMP_NUM_THREADS)
-                                   : static_cast<int>(std::thread::hardware_concurrency());
-    omp_set_num_threads(threads_count);
-    spdlog::info("threads = {}", threads_count);
+        const auto* const omp_num_threads = std::getenv("OMP_NUM_THREADS");
+        const auto threads_count =
+            static_cast<bool>(omp_num_threads)
+                ? std::atoi(omp_num_threads)
+                : static_cast<int>(std::thread::hardware_concurrency());
+        omp_set_num_threads(threads_count);
+        core::INFO("threads = {}", threads_count);
 }
+}  // namespace
 
+int main(int argc, char* argv[]) {
+        CLI::App app{"OpenMP vector addition - HPC starter"};
+        std::size_t vector_size{config::default_vector_size};
+        app.add_option("-s,--size", vector_size, "Number of elements")
+            ->check(CLI::PositiveNumber);
+        CLI11_PARSE(app, argc, argv);
 
-void Timer::start() {
-    time_start = Clock::now();
-}
-void Timer::end() {
-    time_end = Clock::now();
+        setup_threads();
+
+        auto [vector_1, vector_2, sum_vector] =
+            create_vectors<float, 3>(vector_size);
+        initialize_inputs(vector_1, vector_2, vector_size);
+
+        core::Timer timer;
+        timer.start();
+        add_vectors(vector_1, vector_2, sum_vector, vector_size);
+        timer.end();
+
+        if (!verify_first_sum(vector_1, vector_2, sum_vector, "OpenMP")) {
+                return EXIT_FAILURE;
+        }
+
+        const auto seconds = timer.elapsed();
+        const auto vector_sum = sum_values(sum_vector);
+        const auto total_size_gb = vector_total_size_gb(vector_size);
+        std::cout << core::write(vector_add_report{
+                         .mode = "openmp",
+                         .vector_size = vector_size,
+                         .seconds = seconds,
+                         .bandwidth_gbs = total_size_gb / seconds,
+                         .mean = vector_sum / static_cast<double>(vector_size),
+                     })
+                  << '\n';
+
+        return EXIT_SUCCESS;
 }

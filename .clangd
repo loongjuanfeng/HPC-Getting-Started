@@ -1,0 +1,15 @@
+CompileFlags:
+  CompilationDatabase: .
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - clang-analyzer-*
+      - bugprone-*
+      - performance-*
+      - portability-*
+      - modernize-use-nullptr
+      - modernize-use-override
+      - modernize-use-using
+    Remove:
+      - bugprone-easily-swappable-parameters
