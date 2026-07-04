@@ -4,15 +4,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 #include <numeric>
 #include <random>
 #include <string>
 #include <vector>
 
-#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include <CLI/CLI.hpp>
+
+#include "header.hh"
 
 namespace config {
 constexpr std::size_t default_size = 4096;
@@ -95,7 +97,6 @@ int main(int argc, char* argv[]) {
         spdlog::info("check passed");
     }
 
-    const auto report_logger = spdlog::stdout_color_mt("REPORT");
     constexpr double giga = 1e9;
     const double seconds = timer.elapsed();
     const auto nonzeros = static_cast<double>(matrix.values.size());
@@ -104,16 +105,19 @@ int main(int argc, char* argv[]) {
                          (total_nonzeros * sizeof(float)) +
                          (static_cast<double>(matrix.rows * repeat) * sizeof(float));
 
-    report_logger->info("=== CSR SpMV Baseline ===");
-    report_logger->info("{:>12} = {:>10}", "matrix", matrix_name);
-    report_logger->info("{:>12} = {:>10}", "rows", matrix.rows);
-    report_logger->info("{:>12} = {:>10}", "nonzeros", matrix.values.size());
-    report_logger->info("{:>12} = {:>10.2f}", "nnz/row", nonzeros / matrix.rows);
-    report_logger->info("{:>12} = {:>10}", "repeat", repeat);
-    report_logger->info("{:>12} = {:>10.4f} s", "time", seconds);
-    report_logger->info("{:>12} = {:>10.4f} GNNZ/s", "throughput", total_nonzeros / seconds / giga);
-    report_logger->info("{:>12} = {:>10.4f} GB/s", "bandwidth", bytes / seconds / giga);
-    report_logger->info("{:>12} = {:>10.4f}", "checksum", checksum);
+    std::cout << core::write(spmv_csr_report{
+                     .mode = "baseline",
+                     .matrix = std::string_view{matrix_name},
+                     .rows = matrix.rows,
+                     .nonzeros = matrix.values.size(),
+                     .nonzeros_per_row = nonzeros / matrix.rows,
+                     .repeat = repeat,
+                     .seconds = seconds,
+                     .throughput_gnnzs = total_nonzeros / seconds / giga,
+                     .bandwidth_gbs = bytes / seconds / giga,
+                     .checksum = checksum,
+                 })
+              << '\n';
 
     return EXIT_SUCCESS;
 }
