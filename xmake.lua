@@ -29,6 +29,11 @@ target "core"
         add_packages("spdlog", { public = false })
         add_packages("glaze", { public = false })
 
+target "report_test"
+        set_kind "binary"
+        add_files "source/core/report_test.cc"
+        add_deps "core"
+
 function add_hpc_target(name, file, opts)
         opts = opts or { }
 
