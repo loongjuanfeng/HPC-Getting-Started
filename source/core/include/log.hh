@@ -4,17 +4,20 @@
 
 namespace core {
 template <typename... Arguments>
-void INFO(Arguments&&... arguments) {
-        spdlog::info(std::forward<Arguments>(arguments)...);
+void INFO(spdlog::format_string_t<Arguments...> format,
+          Arguments&&... arguments) {
+        spdlog::info(format, std::forward<Arguments>(arguments)...);
 }
 
 template <typename... Arguments>
-void WARN(Arguments&&... arguments) {
-        spdlog::warn(std::forward<Arguments>(arguments)...);
+void WARN(spdlog::format_string_t<Arguments...> format,
+          Arguments&&... arguments) {
+        spdlog::warn(format, std::forward<Arguments>(arguments)...);
 }
 
 template <typename... Arguments>
-void ERROR(Arguments&&... arguments) {
-        spdlog::error(std::forward<Arguments>(arguments)...);
+void ERROR(spdlog::format_string_t<Arguments...> format,
+           Arguments&&... arguments) {
+        spdlog::error(format, std::forward<Arguments>(arguments)...);
 }
 }  // namespace core

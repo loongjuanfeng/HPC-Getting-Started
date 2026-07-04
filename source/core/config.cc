@@ -1,15 +1,31 @@
-// #include <toml++/toml.hpp>
+#include "config.hh"
 
-// namespace core {
+namespace core {
 
-// using Table = toml::table;
+Table read(const std::filesystem::path& path) {
+        return toml::parse_file(path.string());
+}
 
-// Table merge(Table& base, const Table& custom) {
-//         if (auto* table = custom.as_table()) {
-//                 for (const auto& [key, value] : *table) {
-//                         merge(base[key]);
-//                 }
-//         }
-// }
+namespace {
+void merge_into(Table& result, const Table& custom) {
+        for (const auto& [key, custom_value] : custom) {
+                if (const auto* custom_table = custom_value.as_table()) {
+                        if (auto* base_table = result[key].as_table()) {
+                                merge_into(*base_table, *custom_table);
+                        } else {
+                                result.insert_or_assign(key, *custom_table);
+                        }
+                } else {
+                        result.insert_or_assign(key, custom_value);
+                }
+        }
+}
+}  // namespace
 
-// }  // namespace core
+Table merge(const Table& base, const Table& custom) {
+        auto result = base;
+        merge_into(result, custom);
+        return result;
+}
+
+}  // namespace core
