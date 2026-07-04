@@ -9,7 +9,7 @@ add_requires "spdlog"
 add_requires "glaze"
 
 add_requires("openmp", { system = true })
-add_requires("openblas", { system = true })
+add_requires("openblas", { system = false })
 
 option "cuda"
         set_default(false)
@@ -19,6 +19,7 @@ option_end()
 
 if has_config("cuda") then
         add_requires("cuda", { system = true, configs = { utils = { "cublas" } } })
+        add_cuflags("--std=c++23", { force = true })
 end
 
 option "native"
@@ -78,12 +79,16 @@ function add_hpc_target(name, file, opts)
                 if opts.cuda then
                         add_packages "cuda"
                 end
+
+                if opts.cublas then
+                        add_links "cublas"
+                end
 end
 
 add_hpc_target("mat_mul_openmp", "source/mat_mul/openmp.cc", { openmp = true })
 add_hpc_target("mat_mul_openblas", "source/mat_mul/openblas.cc", { openblas = true })
 add_hpc_target("vec_add_openmp", "source/vec_add/openmp.cc", { openmp = true })
 if has_config("cuda") then
-        add_hpc_target("mat_mul_cublas", "source/mat_mul/cublas.cu", { cuda = true })
+        add_hpc_target("mat_mul_cublas", "source/mat_mul/cublas.cu", { cuda = true, cublas = true })
         add_hpc_target("vec_add_cuda", "source/vec_add/cublas.cu", { cuda = true })
 end

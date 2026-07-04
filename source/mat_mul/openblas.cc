@@ -8,16 +8,32 @@
 #include <iostream>
 #include <limits>
 #include <random>
+#include <thread>
 
 #include "header.hh"
 #include "log.hh"
 #include "timer.hh"
+
+namespace {
+void setup_threads() {
+        const auto* const openblas_num_threads =
+            std::getenv("OPENBLAS_NUM_THREADS");
+        const auto threads_count =
+            static_cast<bool>(openblas_num_threads)
+                ? std::atoi(openblas_num_threads)
+                : static_cast<int>(std::thread::hardware_concurrency());
+        openblas_set_num_threads(threads_count);
+        core::INFO("threads = {}", threads_count);
+}
+}  // namespace
 
 int main(int argc, char* argv[]) {
         CLI::App app{"OpenBLAS matrix multiplication - HPC"};
         std::size_t matrix_size{config::default_matrix_size};
         app.add_option("-s,--size", matrix_size, "Matrix dimension (N x N)");
         CLI11_PARSE(app, argc, argv);
+
+        setup_threads();
 
         auto [A, B, C] = create_matrix<float, 3>(matrix_size);
 
