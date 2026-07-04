@@ -82,8 +82,8 @@ end
 
 add_hpc_target("mat_mul_openmp", "source/mat_mul/openmp.cc", { openmp = true })
 add_hpc_target("mat_mul_openblas", "source/mat_mul/openblas.cc", { openblas = true })
-add_hpc_target("vec_add_openmp", "source/vec_add/vector_addition-openmp.cc", { openmp = true })
+add_hpc_target("vec_add_openmp", "source/vec_add/openmp.cc", { openmp = true })
 if has_config("cuda") then
         add_hpc_target("mat_mul_cublas", "source/mat_mul/cublas.cu", { cuda = true })
-        add_hpc_target("vec_add_cuda", "source/vec_add/vector_addition-cuda.cu", { cuda = true })
+        add_hpc_target("vec_add_cuda", "source/vec_add/cublas.cu", { cuda = true })
 end
