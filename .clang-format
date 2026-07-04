@@ -1,9 +1,2 @@
-BasedOnStyle: LLVM
-IndentWidth: 4
-AccessModifierOffset: -4
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLoopsOnASingleLine: false
-BreakBeforeBraces: Attach
-ColumnLimit: 100
-PointerAlignment: Left
+BasedOnStyle: Google
+IndentWidth: 8

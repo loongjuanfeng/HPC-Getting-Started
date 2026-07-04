@@ -1,12 +1,6 @@
-# Build directories and generated CMake state
+# Build directories and generated Xmake state
+.xmake/
 build/
-cmake-build-*/
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-compile_commands.json
-CTestTestfile.cmake
-Testing/
 
 # Build tool output
 build.ninja
@@ -23,6 +17,7 @@ build.ninja
 *.obj
 *.out
 *.so
+compile_commands.json
 
 # Local benchmark outputs and logs
 *.csv
