@@ -20,12 +20,10 @@ build.ninja
 compile_commands.json
 
 # Local benchmark outputs and logs
-*.csv
-*.log
-*.prof
-*.trace
-perf.data
-perf.data.*
+data/
+
+# Reports
+reports/**.pdf
 
 # Editor and OS files
 .cache/
