@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -36,7 +37,7 @@ public:
 struct csr_matrix {
     std::size_t rows{};
     std::vector<std::size_t> row_offsets;
-    std::vector<std::size_t> column_indices;
+    std::vector<std::uint32_t> column_indices;
     std::vector<float> values;
 };
 
@@ -46,18 +47,19 @@ void spmv_csr_baseline(const csr_matrix& matrix, const std::vector<float>& x,
                        std::vector<float>& y);
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"CSR SpMV baseline template"};
+    CLI::App app{"CSR SpMV baseline"};
     std::size_t size = config::default_size;
     std::size_t repeat = config::default_repeat;
     std::uint64_t seed = config::default_seed;
     std::string matrix_name = "poisson5";
     bool check = false;
 
-    app.add_option("-n,--size", size, "Matrix size, or grid width for poisson5");
-    app.add_option("-r,--repeat", repeat, "SpMV repeat count");
+    app.add_option("-n,--size", size, "Matrix size, or grid width for poisson5")
+        ->check(CLI::PositiveNumber);
+    app.add_option("-r,--repeat", repeat, "SpMV repeat count")->check(CLI::PositiveNumber);
     app.add_option("--matrix", matrix_name, "Synthetic matrix: {poisson5,powerlaw}");
     app.add_option("--seed", seed, "Random seed for irregular matrix generation");
-    app.add_flag("--check", check, "Check result after the baseline kernel is implemented");
+    app.add_flag("--check", check, "Validate the computed checksum");
     CLI11_PARSE(app, argc, argv);
 
     csr_matrix matrix;
@@ -81,7 +83,16 @@ int main(int argc, char* argv[]) {
 
     const double checksum = std::reduce(y.begin(), y.end(), 0.0);
     if (check) {
-        spdlog::warn("check is wired, but the baseline kernel is still a TODO template");
+        const double expected_checksum =
+            matrix_name == "poisson5" ? static_cast<double>(4 * size)
+                                      : static_cast<double>(matrix.rows);
+        const double tolerance = 1.0e-4 * std::max(1.0, expected_checksum);
+        if (std::abs(checksum - expected_checksum) > tolerance) {
+            spdlog::error("check failed: checksum = {}, expected {}", checksum,
+                          expected_checksum);
+            return EXIT_FAILURE;
+        }
+        spdlog::info("check passed");
     }
 
     const auto report_logger = spdlog::stdout_color_mt("REPORT");
@@ -93,7 +104,7 @@ int main(int argc, char* argv[]) {
                          (total_nonzeros * sizeof(float)) +
                          (static_cast<double>(matrix.rows * repeat) * sizeof(float));
 
-    report_logger->info("=== CSR SpMV Baseline Template ===");
+    report_logger->info("=== CSR SpMV Baseline ===");
     report_logger->info("{:>12} = {:>10}", "matrix", matrix_name);
     report_logger->info("{:>12} = {:>10}", "rows", matrix.rows);
     report_logger->info("{:>12} = {:>10}", "nonzeros", matrix.values.size());
@@ -111,33 +122,36 @@ csr_matrix make_poisson5_matrix(std::size_t grid_size) {
     csr_matrix matrix;
     matrix.rows = grid_size * grid_size;
     matrix.row_offsets.resize(matrix.rows + 1);
+    matrix.column_indices.reserve(matrix.rows * 5);
+    matrix.values.reserve(matrix.rows * 5);
 
-    // Instructions:
-    // 1. In this generator, 'grid_size' is the width of a square 2D grid.
-    //    The sparse matrix has grid_size * grid_size rows.
-    // 2. Map a grid point (i, j) to a matrix row with:
-    //        row = i * grid_size + j
-    // 3. Visit rows in increasing row order. At the start of each row, set:
-    //        matrix.row_offsets[row] = matrix.values.size()
-    // 4. Append the center entry first:
-    //        column = row
-    //        value  = 4.0F
-    // 5. Append neighbor entries only when the neighbor exists:
-    //        up    exists when i > 0
-    //        down  exists when i + 1 < grid_size
-    //        left  exists when j > 0
-    //        right exists when j + 1 < grid_size
-    //    Use value = -1.0F for each neighbor.
-    // 6. For every appended nonzero, push one column id and one value.
-    //    column_indices.size() must always equal values.size().
-    // 7. After all rows are done, set:
-    //        matrix.row_offsets[matrix.rows] = matrix.values.size()
-    // 8. Sanity checks to print or assert while debugging:
-    //        row_offsets.size() == rows + 1
-    //        row_offsets.front() == 0
-    //        row_offsets.back() == values.size()
-    //        column_indices.size() == values.size()
-    matrix.row_offsets.back() = 0;
+    const auto append = [&matrix](std::size_t column, float value) {
+        matrix.column_indices.push_back(static_cast<std::uint32_t>(column));
+        matrix.values.push_back(value);
+    };
+
+    for (std::size_t i = 0; i < grid_size; i++) {
+        for (std::size_t j = 0; j < grid_size; j++) {
+            const std::size_t row = (i * grid_size) + j;
+            matrix.row_offsets[row] = matrix.values.size();
+
+            append(row, 4.0F);
+            if (i > 0) {
+                append(row - grid_size, -1.0F);
+            }
+            if (i + 1 < grid_size) {
+                append(row + grid_size, -1.0F);
+            }
+            if (j > 0) {
+                append(row - 1, -1.0F);
+            }
+            if (j + 1 < grid_size) {
+                append(row + 1, -1.0F);
+            }
+        }
+    }
+
+    matrix.row_offsets[matrix.rows] = matrix.values.size();
     return matrix;
 }
 
@@ -145,56 +159,58 @@ csr_matrix make_powerlaw_matrix(std::size_t rows, std::uint64_t seed) {
     csr_matrix matrix;
     matrix.rows = rows;
     matrix.row_offsets.resize(rows + 1);
+    if (rows == 0) {
+        return matrix;
+    }
 
-    // Instructions:
-    // 1. Build this after poisson5 and the baseline SpMV kernel are correct.
-    // 2. The goal is not a realistic matrix yet. The goal is uneven row work:
-    //        most rows have a few nonzeros
-    //        a small number of rows have many nonzeros
-    // 3. Use std::mt19937_64 seeded by 'seed' so benchmark results are repeatable.
-    // 4. For each row:
-    //        set row_offsets[row] = values.size()
-    //        choose a row length
-    //        append that many random columns in [0, rows)
-    //        append one float value for each column
-    // 5. A simple first row-length rule:
-    //        if row % 1000 == 0, use 4096 nonzeros
-    //        else if row % 100 == 0, use 256 nonzeros
-    //        else use 4 nonzeros
-    // 6. Keep column ids valid. Do not worry about duplicate columns at first.
-    //    Duplicate columns are legal in CSR, but they add together mathematically.
-    // 7. Use small values such as 1.0F / row_length to keep checksums readable.
-    // 8. Finish by setting row_offsets[rows] = values.size().
-    // 9. This matrix should make naive OpenMP static row scheduling look worse.
-    (void)seed;
-    matrix.row_offsets.back() = 0;
+    const auto row_length_for = [](std::size_t row) {
+        if (row % 1000 == 0) {
+            return std::size_t{4096};
+        }
+        if (row % 100 == 0) {
+            return std::size_t{256};
+        }
+        return std::size_t{4};
+    };
+
+    std::size_t nonzeros = 0;
+    for (std::size_t row = 0; row < rows; row++) {
+        nonzeros += row_length_for(row);
+    }
+    matrix.column_indices.reserve(nonzeros);
+    matrix.values.reserve(nonzeros);
+
+    std::mt19937_64 random_number_generator(seed);
+    std::uniform_int_distribution<std::size_t> column_distribution(0, rows - 1);
+
+    for (std::size_t row = 0; row < rows; row++) {
+        matrix.row_offsets[row] = matrix.values.size();
+        const std::size_t row_length = row_length_for(row);
+        const float value = 1.0F / static_cast<float>(row_length);
+
+        for (std::size_t index = 0; index < row_length; index++) {
+            matrix.column_indices.push_back(
+                static_cast<std::uint32_t>(column_distribution(random_number_generator)));
+            matrix.values.push_back(value);
+        }
+    }
+
+    matrix.row_offsets[rows] = matrix.values.size();
     return matrix;
 }
 
 void spmv_csr_baseline(const csr_matrix& matrix, const std::vector<float>& x,
                        std::vector<float>& y) {
-    // Instructions:
-    // 1. This is y = A * x where A is stored in CSR format.
-    // 2. Loop over rows serially:
-    //        for row in [0, matrix.rows)
-    // 3. For each row, get its nonzero range:
-    //        begin = row_offsets[row]
-    //        end   = row_offsets[row + 1]
-    // 4. Start a local float accumulator at 0.0F.
-    // 5. Loop over k in [begin, end):
-    //        column = column_indices[k]
-    //        value  = values[k]
-    //        accumulator += value * x[column]
-    // 6. After the inner loop, write:
-    //        y[row] = accumulator
-    // 7. Do not write to y[row] before the accumulator is complete.
-    // 8. Do not use OpenMP in this baseline file.
-    // 9. Useful first test:
-    //        poisson5 with x filled with 1.0F
-    //        interior rows should produce 0.0F because 4 - 1 - 1 - 1 - 1 = 0
-    //        edge rows produce positive values because they have fewer neighbors
-    // 10. After this works, use this function as the reference for OpenMP checks.
-    std::fill(y.begin(), y.end(), 0.0F);
-    (void)matrix;
-    (void)x;
+    for (std::size_t row = 0; row < matrix.rows; row++) {
+        float accumulator = 0.0F;
+        const std::size_t begin = matrix.row_offsets[row];
+        const std::size_t end = matrix.row_offsets[row + 1];
+
+        for (std::size_t offset = begin; offset < end; offset++) {
+            const std::uint32_t column = matrix.column_indices[offset];
+            accumulator += matrix.values[offset] * x[column];
+        }
+
+        y[row] = accumulator;
+    }
 }

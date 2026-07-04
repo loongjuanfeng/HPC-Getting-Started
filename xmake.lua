@@ -88,6 +88,9 @@ end
 add_hpc_target("mat_mul_openmp", "source/mat_mul/openmp.cc", { openmp = true })
 add_hpc_target("mat_mul_openblas", "source/mat_mul/openblas.cc", { openblas = true })
 add_hpc_target("vec_add_openmp", "source/vec_add/openmp.cc", { openmp = true })
+add_hpc_target("spmv_csr_baseline", "source/spmv_csr/baseline.cc")
+add_hpc_target("spmv_csr_openmp", "source/spmv_csr/openmp.cc", { openmp = true })
+add_hpc_target("spmv_csr_balanced", "source/spmv_csr/balanced.cc", { openmp = true })
 if has_config("cuda") then
         add_hpc_target("mat_mul_cublas", "source/mat_mul/cublas.cu", { cuda = true, cublas = true })
         add_hpc_target("vec_add_cuda", "source/vec_add/cublas.cu", { cuda = true })

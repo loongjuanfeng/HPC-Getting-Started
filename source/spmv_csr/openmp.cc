@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -46,20 +47,23 @@ void setup_threads();
 csr_matrix make_poisson5_matrix(std::size_t grid_size);
 csr_matrix make_powerlaw_matrix(std::size_t rows, std::uint64_t seed);
 void spmv_csr_openmp(const csr_matrix& matrix, const std::vector<float>& x, std::vector<float>& y);
+void spmv_csr_reference(const csr_matrix& matrix, const std::vector<float>& x,
+                        std::vector<float>& y);
 
 int main(int argc, char* argv[]) {
-    CLI::App app{"CSR SpMV OpenMP template"};
+    CLI::App app{"CSR SpMV OpenMP"};
     std::size_t size = config::default_size;
     std::size_t repeat = config::default_repeat;
     std::uint64_t seed = config::default_seed;
     std::string matrix_name = "poisson5";
     bool check = false;
 
-    app.add_option("-n,--size", size, "Matrix size, or grid width for poisson5");
-    app.add_option("-r,--repeat", repeat, "SpMV repeat count");
+    app.add_option("-n,--size", size, "Matrix size, or grid width for poisson5")
+        ->check(CLI::PositiveNumber);
+    app.add_option("-r,--repeat", repeat, "SpMV repeat count")->check(CLI::PositiveNumber);
     app.add_option("--matrix", matrix_name, "Synthetic matrix: poisson5 or powerlaw");
     app.add_option("--seed", seed, "Random seed for irregular matrix generation");
-    app.add_flag("--check", check, "Check result after the baseline kernel is implemented");
+    app.add_flag("--check", check, "Compare against a serial reference result");
     CLI11_PARSE(app, argc, argv);
 
     setup_threads();
@@ -85,7 +89,20 @@ int main(int argc, char* argv[]) {
 
     const double checksum = std::reduce(y.begin(), y.end(), 0.0);
     if (check) {
-        spdlog::warn("check is wired, but the serial reference kernel is still a TODO template");
+        std::vector<float> reference(matrix.rows);
+        spmv_csr_reference(matrix, x, reference);
+
+        double max_error = 0.0;
+        for (std::size_t row = 0; row < matrix.rows; row++) {
+            max_error =
+                std::max(max_error, std::abs(static_cast<double>(y[row] - reference[row])));
+        }
+
+        if (max_error > 1.0e-5) {
+            spdlog::error("check failed: max error = {}", max_error);
+            return EXIT_FAILURE;
+        }
+        spdlog::info("check passed, max error = {}", max_error);
     }
 
     const auto report_logger = spdlog::stdout_color_mt("REPORT");
@@ -97,7 +114,7 @@ int main(int argc, char* argv[]) {
                          total_nonzeros * sizeof(float) +
                          static_cast<double>(matrix.rows * repeat) * sizeof(float);
 
-    report_logger->info("=== CSR SpMV OpenMP Template ===");
+    report_logger->info("=== CSR SpMV OpenMP ===");
     report_logger->info("{:>12} = {:>10}", "matrix", matrix_name);
     report_logger->info("{:>12} = {:>10}", "rows", matrix.rows);
     report_logger->info("{:>12} = {:>10}", "nonzeros", matrix.values.size());
@@ -116,12 +133,36 @@ csr_matrix make_poisson5_matrix(std::size_t grid_size) {
     csr_matrix matrix;
     matrix.rows = grid_size * grid_size;
     matrix.row_offsets.resize(matrix.rows + 1);
+    matrix.column_indices.reserve(matrix.rows * 5);
+    matrix.values.reserve(matrix.rows * 5);
 
-    // Instructions:
-    // 1. Copy your correct baseline matrix generator here.
-    // 2. Keep it byte-for-byte equivalent while testing correctness.
-    // 3. Do not benchmark OpenMP until the baseline checksum is stable.
-    matrix.row_offsets.back() = 0;
+    const auto append = [&matrix](std::size_t column, float value) {
+        matrix.column_indices.push_back(static_cast<std::uint32_t>(column));
+        matrix.values.push_back(value);
+    };
+
+    for (std::size_t i = 0; i < grid_size; i++) {
+        for (std::size_t j = 0; j < grid_size; j++) {
+            const std::size_t row = (i * grid_size) + j;
+            matrix.row_offsets[row] = matrix.values.size();
+
+            append(row, 4.0F);
+            if (i > 0) {
+                append(row - grid_size, -1.0F);
+            }
+            if (i + 1 < grid_size) {
+                append(row + grid_size, -1.0F);
+            }
+            if (j > 0) {
+                append(row - 1, -1.0F);
+            }
+            if (j + 1 < grid_size) {
+                append(row + 1, -1.0F);
+            }
+        }
+    }
+
+    matrix.row_offsets[matrix.rows] = matrix.values.size();
     return matrix;
 }
 
@@ -129,37 +170,86 @@ csr_matrix make_powerlaw_matrix(std::size_t rows, std::uint64_t seed) {
     csr_matrix matrix;
     matrix.rows = rows;
     matrix.row_offsets.resize(rows + 1);
+    if (rows == 0) {
+        return matrix;
+    }
 
-    // Instructions:
-    // 1. Copy your correct baseline irregular generator here.
-    // 2. Use this matrix to compare static row scheduling with balanced scheduling.
-    // 3. Expect static scheduling to suffer when row lengths are uneven.
-    (void)seed;
-    matrix.row_offsets.back() = 0;
+    const auto row_length_for = [](std::size_t row) {
+        if (row % 1000 == 0) {
+            return std::size_t{4096};
+        }
+        if (row % 100 == 0) {
+            return std::size_t{256};
+        }
+        return std::size_t{4};
+    };
+
+    std::size_t nonzeros = 0;
+    for (std::size_t row = 0; row < rows; row++) {
+        nonzeros += row_length_for(row);
+    }
+    matrix.column_indices.reserve(nonzeros);
+    matrix.values.reserve(nonzeros);
+
+    std::mt19937_64 random_number_generator(seed);
+    std::uniform_int_distribution<std::size_t> column_distribution(0, rows - 1);
+
+    for (std::size_t row = 0; row < rows; row++) {
+        matrix.row_offsets[row] = matrix.values.size();
+        const std::size_t row_length = row_length_for(row);
+        const float value = 1.0F / static_cast<float>(row_length);
+
+        for (std::size_t index = 0; index < row_length; index++) {
+            matrix.column_indices.push_back(
+                static_cast<std::uint32_t>(column_distribution(random_number_generator)));
+            matrix.values.push_back(value);
+        }
+    }
+
+    matrix.row_offsets[rows] = matrix.values.size();
     return matrix;
 }
 
 void spmv_csr_openmp(const csr_matrix& matrix, const std::vector<float>& x,
                      std::vector<float>& y) {
-    // Instructions:
-    // 1. Parallelize the outer row loop with OpenMP.
-    // 2. Each thread writes only y[row], so no atomics are needed.
-    // 3. Keep the inner nonzero loop serial for each row.
-    // 4. Start with schedule(static), then test schedule(dynamic).
-    // 5. Compare checksum and max error against the baseline.
 #pragma omp parallel for schedule(static)
-    for (std::size_t row = 0; row < y.size(); row++) {
-        y[row] = 0.0F;
+    for (std::size_t row = 0; row < matrix.rows; row++) {
+        float accumulator = 0.0F;
+        const std::size_t begin = matrix.row_offsets[row];
+        const std::size_t end = matrix.row_offsets[row + 1];
+
+        for (std::size_t offset = begin; offset < end; offset++) {
+            const std::uint32_t column = matrix.column_indices[offset];
+            accumulator += matrix.values[offset] * x[column];
+        }
+
+        y[row] = accumulator;
     }
-    (void)matrix;
-    (void)x;
+}
+
+void spmv_csr_reference(const csr_matrix& matrix, const std::vector<float>& x,
+                        std::vector<float>& y) {
+    for (std::size_t row = 0; row < matrix.rows; row++) {
+        float accumulator = 0.0F;
+        const std::size_t begin = matrix.row_offsets[row];
+        const std::size_t end = matrix.row_offsets[row + 1];
+
+        for (std::size_t offset = begin; offset < end; offset++) {
+            const std::uint32_t column = matrix.column_indices[offset];
+            accumulator += matrix.values[offset] * x[column];
+        }
+
+        y[row] = accumulator;
+    }
 }
 
 void setup_threads() {
     const auto* const omp_num_threads = std::getenv("OMP_NUM_THREADS");
-    const auto threads_count = static_cast<bool>(omp_num_threads)
-                                   ? std::atoi(omp_num_threads)
-                                   : static_cast<int>(std::thread::hardware_concurrency());
+    auto threads_count = static_cast<bool>(omp_num_threads)
+                             ? std::atoi(omp_num_threads)
+                             : static_cast<int>(std::thread::hardware_concurrency());
+    threads_count = std::max(threads_count, 1);
+    omp_set_dynamic(0);
     omp_set_num_threads(threads_count);
     spdlog::info("threads = {}", threads_count);
 }
