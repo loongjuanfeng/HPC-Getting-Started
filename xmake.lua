@@ -11,15 +11,14 @@ add_requires "glaze"
 add_requires("openmp", { system = true })
 add_requires("openblas", { system = true })
 
-option "cuda"
+option "with_cuda"
         set_default(false)
         set_showmenu(true)
         set_description "build CUDA targets"
 option_end()
 
-if has_config("cuda") then
+if has_config("with_cuda") then
         add_requires("cuda", { system = true, configs = { utils = { "cublas" } } })
-        add_cuflags("--std=c++23", { force = true })
 end
 
 option "native"
@@ -77,6 +76,8 @@ function add_hpc_target(name, file, opts)
                 end
 
                 if opts.cuda then
+                        set_languages "c++20"
+                        add_cugencodes "native"
                         add_packages "cuda"
                 end
 
@@ -94,7 +95,7 @@ add_hpc_target("spmv_csr_balanced", "source/spmv_csr/balanced.cc", { openmp = tr
 add_hpc_target("stencil_2d_baseline", "source/stencil_2d/baseline.cc")
 add_hpc_target("stencil_2d_openmp", "source/stencil_2d/openmp.cc", { openmp = true })
 add_hpc_target("stencil_2d_tiled", "source/stencil_2d/tiled.cc", { openmp = true })
-if has_config("cuda") then
+if has_config("with_cuda") then
         add_hpc_target("mat_mul_cublas", "source/mat_mul/cublas.cu", { cuda = true, cublas = true })
         add_hpc_target("vec_add_cuda", "source/vec_add/cublas.cu", { cuda = true })
 end
