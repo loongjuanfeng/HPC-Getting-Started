@@ -22,8 +22,8 @@ compile_commands.json
 # Local benchmark outputs and logs
 data/
 
-# Reports
-reports/**.pdf
+# Local reports
+reports/
 
 # Editor and OS files
 .cache/
