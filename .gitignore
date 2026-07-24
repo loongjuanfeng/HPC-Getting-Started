@@ -35,3 +35,6 @@ reports/**.pdf
 *~
 .DS_Store
 Thumbs.db
+
+# perf data
+perf.data

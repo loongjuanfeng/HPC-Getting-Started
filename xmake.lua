@@ -9,7 +9,7 @@ add_requires "spdlog"
 add_requires "glaze"
 
 add_requires("openmp", { system = true })
-add_requires("openblas", { system = false })
+add_requires("openblas", { system = true })
 
 option "cuda"
         set_default(false)
