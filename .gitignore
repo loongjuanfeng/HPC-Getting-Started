@@ -32,6 +32,9 @@ build.ninja
 perf.data
 perf.data.*
 
+# Local reports
+reports/
+
 # Editor and OS files
 .cache/
 .clangd/
